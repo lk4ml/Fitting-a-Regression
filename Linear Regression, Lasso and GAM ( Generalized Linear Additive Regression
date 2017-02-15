@@ -1,0 +1,323 @@
+#Data Preprocessing
+#set working directory
+setwd("yourlocation"/BIKESHARE")
+
+#read in train/test
+train <- read.csv("train.csv")
+
+summary(is.na(train))
+head(train)
+str(train)
+
+#factorize training set
+train_factor <- train
+train_factor$weather <- factor(train$weather)
+train_factor$holiday <- factor(train$holiday)
+train_factor$workingday <- factor(train$workingday)
+train_factor$season <- factor(train$season)
+
+head(train_factor)
+str(train_factor)
+
+#create time column by stripping out timestamp
+train_factor$time <- substring(train$datetime,12,20)
+
+#factorize new timestamp column
+train_factor$time <- factor(train_factor$time)
+
+#create day of week column
+train_factor$day <- weekdays(as.Date(train_factor$datetime))
+train_factor$day <- as.factor(train_factor$day)
+
+aggregate(train_factor[,"count"],list(train_factor$day),mean)
+
+#convert time and create $hour as integer to evaluate
+train_factor$hour<- as.numeric(substr(train_factor$time,1,2))
+
+#convert hour back to factor
+train_factor$hour <- as.factor(train_factor$hour)
+head(train_factor)
+
+#create month column
+train_factor$month<-as.factor(substr(train_factor$datetime,6,7))
+#create year column
+train_factor$year<-as.factor(substr(train_factor$datetime,1,4))
+
+#Assign training data and test data
+smp_size <- floor(0.7 * nrow(train_factor))
+
+
+set.seed(123)
+train_index <- sample(seq_len(nrow(train_factor)), size = smp_size)
+test_data = train_factor[-train_index,]
+train_data = train_factor[train_index,]
+
+str(train_data)
+str(test_data)
+
+
+####Linear Regression
+#remove several column which will not be used:'datetime' and 'time'
+train_data1<-train_data[,-c(1,13)]
+
+##1. Multiple LM, since casual and registered are dependent variables with count, which shall not
+#be included in the lm model, so we remove them from our model.
+#And we use some log transformation since our response "count" has to be positive.
+#Original GLM model with log's
+
+train_oglm2<-lm(sign(count)*log(1+abs(count))~ season+holiday+workingday+weather+temp+atemp+
+                  humidity+windspeed+day+hour+month+year,data = train_data1)
+summary(train_oglm2)
+array_test<-array(test_data$count,dim=c(3266,1))
+pred_oglm2<-predict(train_oglm2,newdata = test_data)
+pred_oglm2<-exp(pred_oglm2)
+#Original GLM model with log's
+RMSLE_oglm2 <- sqrt(colSums((log(pred_oglm2+1) - log(array_test+1))^2)/length(array_test))
+RMSLE_oglm2 #0.5860455
+
+
+#Variable selection
+#Forward Stepwise Selection
+library(MASS)
+model_0<-lm(sign(count)*log(1+abs(count))~1,data = train_data1)
+model_full<-lm(sign(count)*log(1+abs(count))~ season+holiday+workingday+weather+temp+atemp+
+                 humidity+windspeed+day+hour+month+year,data = train_data1)
+stepAIC(object = model_0,scope = formula(model_full),direction = "forward")
+#lm(formula = count ~ hour + atemp + year + month + weather + humidity + day + windspeed + temp)
+#Forward-Backward Stepwise Selection
+train_lm3<-stepAIC(object = model_0,scope = formula(model_full),direction="both")
+#lm(formula = count ~ hour + atemp + year + month + weather + humidity + day + windspeed + temp)
+summary(train_lm3)
+
+anova(train_lm3,train_oglm2)
+AIC(train_lm3,train_oglm2)
+BIC(train_lm3,train_oglm2)
+
+#from above anova, AIC, BIC results, we can tell train_lm3 is a little better model than train_oglm2
+#RMSLE
+pred_lm3<-predict(train_lm3,newdata = test_data)
+pred_lm3<-exp(pred_lm3)
+RMSLE_lm3 <- sqrt(colSums((log(pred_lm3+1) - log(array_test+1))^2)/length(array_test))
+RMSLE_lm3#[1] 0.5860632 did not much better than other lm models 
+
+
+#now we simply plot the count with each of the variables to see if transformation needed.
+par(mfrow=c(3,3))
+plot(train_data1$hour,train_data1$count)
+plot(train_data1$atemp,train_data1$count)
+plot(train_data1$year,train_data1$count)
+plot(train_data1$month,train_data1$count)
+plot(train_data1$weather,train_data1$count)
+plot(train_data1$humidity,train_data1$count)
+plot(train_data1$day,train_data1$count)
+plot(train_data1$windspeed,train_data1$count)
+plot(train_data1$temp,train_data1$count)
+#From the plot, it seems that the continues variables 'atemp', 'humidity', 'temp', 'windspeed' need
+#some transformation
+train_lm4<-lm(sign(count)*log(1+abs(count)) ~ hour + poly(atemp,2) + year + month + weather + 
+                poly(humidity,3) + day + windspeed +poly(temp,3),data=train_data1)
+summary(train_lm4)
+
+pred_lm4<-predict(train_lm4,newdata = test_data)
+pred_lm4<-exp(pred_lm4)
+RMSLE_lm4 <- sqrt(colSums((log((pred_lm4+1)) - log(array_test+1))^2)/length(array_test))
+RMSLE_lm4 
+#[1] 0.5788152
+
+#
+train_lm5<-lm(sign(count)*log(1+abs(count)) ~ hour + poly(atemp,2) + year + month + weather + 
+                poly(humidity,3) + day + windspeed +poly(temp,3)+hour:year+hour:day+
+                hour:month+day:year+month:year+hour:atemp+hour:humidity+hour:windspeed+hour:temp+day:atemp+
+                day:humidity+day:windspeed+day:temp+month:atemp+month:humidity+month:windspeed+month:temp+
+                year:atemp+year:humidity+year:temp+atemp:weather+atemp:humidity+atemp:windspeed+atemp:temp+
+                weather:humidity+weather:temp+weather:windspeed+humidity:windspeed+
+                humidity:temp+windspeed:temp,data=train_data1)
+summary(train_lm5)
+
+pred_lm5<-predict(train_lm5,newdata = test_data)
+pred_lm5<-exp(pred_lm5)
+RMSLE_lm5 <- sqrt(colSums((log((pred_lm5+1)) - log(array_test+1))^2)/length(array_test))
+RMSLE_lm5 
+MSE_lm5 <- sqrt(colSums((pred_lm5 - array_test)^2)/length(array_test))
+MSE_lm5
+
+####Interaction term (hour, day, month, year, atemp, weather, humidity, windspeed, temp)
+lm_in1<-lm(count~hour:day,data = train_data1)###
+summary(lm_in1)
+lm_in2<-lm(count~hour:month,data = train_data1)###
+summary(lm_in2)
+lm_in3<-lm(count~hour:year,data = train_data1)####
+summary(lm_in3)
+lm_in4<-lm(count~month:year,data = train_data1)###
+summary(lm_in4)
+lm_in5<-lm(count~month:day,data = train_data1)
+summary(lm_in5)
+lm_in6<-lm(count~day:atemp,data = train_data1)###
+summary(lm_in6)
+lm_in7<-lm(count~year:day,data = train_data1)###
+summary(lm_in7)
+lm_in8<-lm(count~hour:atemp,data = train_data1)###
+summary(lm_in8)
+lm_in9<-lm(count~hour:humidity,data = train_data1)###
+summary(lm_in9)
+lm_in10<-lm(count~hour:weather,data = train_data1)
+summary(lm_in10)
+lm_in11<-lm(count~hour:windspeed,data = train_data1)###
+summary(lm_in11)
+lm_in12<-lm(count~hour:temp,data = train_data1)###
+summary(lm_in12)
+lm_in13<-lm(count~day:weather,data = train_data1)
+summary((lm_in13))
+lm_in14<-lm(count~day:humidity,data = train_data1)###
+summary((lm_in14))
+lm_in15<-lm(count~day:windspeed,data = train_data1)###
+summary((lm_in15))
+lm_in16<-lm(count~day:temp,data = train_data1)###
+summary((lm_in16))
+lm_in17<-lm(count~month:atemp,data = train_data1)###
+summary((lm_in17))
+lm_in18<-lm(count~month:weather,data = train_data1)
+summary((lm_in18))
+lm_in19<-lm(count~month:humidity,data = train_data1)###
+summary((lm_in19))
+lm_in20<-lm(count~month:windspeed,data = train_data1)###
+summary((lm_in20))
+lm_in21<-lm(count~month:temp,data = train_data1)###
+summary((lm_in21))
+
+lm_in22<-lm(count~year:atemp,data = train_data1)###
+summary((lm_in22))
+lm_in23<-lm(count~year:weather,data = train_data1)
+summary((lm_in23))
+lm_in24<-lm(count~year:humidity,data = train_data1)###
+summary((lm_in24))
+lm_in25<-lm(count~year:windspeed,data = train_data1)
+summary((lm_in25))
+lm_in26<-lm(count~year:temp,data = train_data1)###
+summary((lm_in26))
+
+lm_in27<-lm(count~atemp:humidity,data = train_data1)###
+summary((lm_in27))
+lm_in28<-lm(count~atemp:weather,data = train_data1)###
+summary((lm_in28))
+
+lm_in29<-lm(count~atemp:windspeed,data = train_data1)###
+summary((lm_in29))
+lm_in30<-lm(count~atemp:temp,data = train_data1)###
+summary((lm_in30))
+lm_in31<-lm(count~humidity:weather,data = train_data1)###
+summary((lm_in31))
+lm_in32<-lm(count~humidity:windspeed,data = train_data1)###
+summary((lm_in32))
+lm_in33<-lm(count~humidity:temp,data = train_data1)###
+summary((lm_in33))
+lm_in34<-lm(count~weather:windspeed,data = train_data1)###
+summary((lm_in34))
+lm_in35<-lm(count~weather:temp,data = train_data1)###
+summary((lm_in35))
+lm_in36<-lm(count~windspeed:temp,data = train_data1)###
+summary((lm_in36))
+
+
+
+#GAM
+library(mgcv)
+train_gam1<-gam(sign(count)*log(1+abs(count))~ hour + atemp + year + month + weather + s(humidity) +
+                  day + s(windspeed) +s(temp),data=train_data1)
+summary(train_gam1)
+pred_gam1<-as.numeric(predict(train_gam1,newdata= test_data))
+pred_gam1<-exp(pred_gam1)
+array_test<-array(test_data$count,dim=c(3266,1))
+RMSLE_gam1 <- sqrt(colSums((log((pred_gam1+1)) - log(array_test+1))^2)/length(array_test))
+RMSLE_gam1
+#[1] 0.5776358
+
+#GAM with interaction terms
+train_gam2<-gam(sign(count)*log(1+abs(count))~ hour + atemp + year + month + weather + s(humidity) +
+                  day + s(windspeed) +s(temp)+hour:year+hour:day+hour:month
+                +day:month+day:year+month:year+hour:atemp+hour:humidity+
+                  hour:windspeed+hour:temp,data=train_data1)
+
+summary(train_gam2)
+pred_gam2<-as.numeric(predict(train_gam2,newdata= test_data))
+pred_gam2<-exp(pred_gam2)
+array_test<-array(test_data$count,dim=c(3266,1))
+RMSLE_gam2 <- sqrt(colSums((log((pred_gam2+1)) - log(array_test+1))^2)/length(array_test))
+RMSLE_gam2#[1] 0.325043
+
+MSE1 <- sqrt(colSums((pred_gam2 - array_test)^2)/length(array_test))
+MSE1 #[1] 50.07516
+
+
+
+#GAM with full interaction terms
+
+train_gam3<-gam(sign(count)*log(1+abs(count))~ hour+day+month+year+ atemp+ weather+ s(humidity)+ s(windspeed)+s(temp)+hour:year+hour:day+
+                  hour:month+day:year+month:year+hour:atemp+hour:humidity+hour:windspeed+hour:temp+day:atemp+
+                  day:humidity+day:windspeed+day:temp+month:atemp+month:humidity+month:windspeed+month:temp+
+                  year:atemp+year:humidity+year:temp+atemp:weather+atemp:humidity+atemp:windspeed+atemp:temp+
+                  weather:humidity+weather:temp+weather:windspeed+humidity:windspeed+
+                  humidity:temp+windspeed:temp,data=train_data1)
+
+summary(train_gam3)
+pred_gam3<-as.numeric(predict(train_gam3,newdata= test_data))
+pred_gam3<-exp(pred_gam3)
+array_test<-array(test_data$count,dim=c(3266,1))
+RMSLE_gam3 <- sqrt(colSums((log((pred_gam3+1)) - log(array_test+1))^2)/length(array_test))
+RMSLE_gam3#[1] 0.3215348
+MSE2 <- sqrt(colSums((pred_gam3 - array_test)^2)/length(array_test))
+MSE2 #[1] 48.92687
+par(mfrow=c(1,1))
+residual<-pred_gam3-array_test
+plot(density(residual))
+sigma <- sd(residual)
+str(residual[which(abs(residual) <= sigma)])
+
+#lasso
+library(glmnet)
+X<-model.matrix(sign(count)*log(1+abs(count))~.,train_data1[,-c(9,10)])
+Y<-sign(train_data1$count)*log(1+abs(train_data1$count))
+lasso_1 <- glmnet(x = X,y = Y,alpha=1,lambda = 1,intercept = FALSE)
+lasso_1$beta
+lasso_2 <- glmnet(x = X,y = Y,alpha=1)
+par(mfrow=c(1,1))
+plot(lasso_2,xvar="lambda")
+lasso_cv <- cv.glmnet(x = X,y = Y,alpha=1)
+plot(lasso_cv)
+lasso_cv$lambda.min
+lasso_last <- glmnet(x = X,y = Y,alpha=1,lambda = lasso_cv$lambda.min,intercept = FALSE)
+lasso_last$beta
+
+new_matrixtest<-model.matrix(sign(count)*log(1+abs(count))~.,test_data[,-c(1,10,11,13)])
+pred_lasso1<-predict.glmnet(lasso_last,newx = new_matrixtest)
+pred_lasso1<-exp(pred_lasso1)
+array_test<-array(test_data$count,dim=c(3266,1))
+RMSLE_lasso1 <- sqrt(colSums((log((pred_lasso1+1)) - log(array_test+1))^2)/length(array_test))
+RMSLE_lasso1  
+#0.5866662
+
+
+#GLS(time series)#######
+#first, we apply the model from previsou glm2
+library(nlme)
+library(forecast)
+#remove the date and time value
+lm_nodate<-lm(sign(count)*log(1+abs(count)) ~ month+year+day+hour+atemp +weather + humidity+ 
+                windspeed +temp,data=train_data1)
+plot(lm_nodate$residuals)
+arima(lm_nodate$residuals,order = c(1,0,0))
+train_gls1 <- gls(sign(count)*log(1+abs(count)) ~ month+year+day+hour+atemp +weather + humidity + 
+                    windspeed +temp,data=train_data1, correlation=corAR1(value=c(-0.0042)))
+summary(train_gls1)
+pred_gls1<-predict(train_gls1,newdata = test_data)
+pred_gls1<-exp(pred_gls1)
+
+array_test<-array(test_data$count,dim=c(3266,1))
+RMSLE_gls1 <- sqrt(colSums((log((pred_gls1+1)) - log(array_test+1))^2)/length(array_test))
+RMSLE_gls1 
+#[1] 0.5860631
+
+
+
+
+####################################################################################################
