@@ -1,0 +1,202 @@
+#Data Preprocessing
+#set working directory
+setwd("location/Final Project/Data set/Bike-Sharing-Kaggle")
+
+#read in train/test
+train <- read.csv("train.csv")
+
+#Data Preprocessing-----------------------------------------------------------------------------------------
+summary(is.na(train))
+head(train)
+str(train)
+
+#factorize training set
+train_factor <- train
+train_factor$weather <- factor(train$weather)
+train_factor$holiday <- factor(train$holiday)
+train_factor$workingday <- factor(train$workingday)
+train_factor$season <- factor(train$season)
+
+head(train)
+str(train)
+
+#create time column by stripping out timestamp
+train_factor$time <- substring(train$datetime,12,20)
+train_factor$month <- substring(train$datetime,6,7)
+train_factor$year <- substring(train$datetime,1,4)
+
+#factorize new timestamp column
+train_factor$time <- factor(train_factor$time)
+train_factor$month <- factor(train_factor$month)
+train_factor$year <- factor(train_factor$year)
+
+
+#create day of week column
+train_factor$day <- weekdays(as.Date(train_factor$datetime))
+train_factor$day <- as.factor(train_factor$day)
+
+aggregate(train_factor[,"count"],list(train_factor$day),mean)
+
+
+#convert time and create $hour as integer to evaluate
+train_factor$hour<- as.numeric(substr(train_factor$time,1,2))
+
+#convert hour back to factor
+train_factor$hour <- as.factor(train_factor$hour)
+
+head(train_factor)
+ 
+#exclude "registered" and "casual"
+str(train_factor)
+train_factor$registered <- NULL
+train_factor$casual <- NULL
+
+#Optional for zeor windspeed=====================================================================================
+#1. train_factor <- train_factor[-which(train$windspeed == 0),]
+#2. train_factor$windspeed <- ifelse(train_factor$windspeed==0,mean(train_factor$windspeed)*10866/9573,train_factor$windspeed)
+# summary(train_factor$windspeed==0)
+
+
+
+#Assign training data and test data
+smp_size <- floor(0.7 * nrow(train_factor))
+set.seed(123)
+train_index <- sample(seq_len(nrow(train_factor)), size = smp_size)
+test_data = train_factor[-train_index,]
+train_data = train_factor[train_index,]
+
+
+
+#Model Selection------------------------------------------------------------------------------------
+################################Conditional Inference Tree###################################################3
+library('party')
+
+#create our formula
+#formula <- count ~ season + holiday + workingday + weather + temp + atemp + humidity + hour 
+formula1 <- count ~ season + holiday + workingday + weather + temp + atemp + humidity + hour + windspeed + day + year + hour
+colnames(train_data)
+
+#build our model
+fit.ctree <- ctree(formula1, data=train_data)
+
+#run model against test data set
+head(test_data)
+predict.ctree <- predict(fit.ctree, test_data)
+MSE_ctree <- sqrt(colSums((predict.ctree - test_data$count)^2)/length(test_data$count))
+MSE_ctree
+RMSLE_ctree <- sqrt(colSums((log(predict.ctree+1) - log(test_data$count+1))^2)/length(test_data$count))
+RMSLE_ctree
+
+
+
+mean(test_data$count)
+residual_ctree<-predict.ctree - test_data$count
+hist(residual_ctree)
+plot(density(residual_ctree))
+sigma <- sd(residual_ctree)
+str(residual_ctree[which(abs(residual_ctree) <= sigma)])
+
+range(floor(predict.ctree)+1)
+range(test_data$count)
+m <- lm(count ~ season + holiday + workingday + weather + temp + atemp + humidity + hour + windspeed + day + year + hour, train_data)
+summary(m)
+
+plot(m)
+  
+res <- predict.ctree - test_data$count
+summary(res)
+
+var(res)
+plot(test_data$count,predict.ctree)
+a <-cbind(actual=test_data$count,predit=predict.ctree)
+b<-as.data.frame(a)
+ggplot(data=b,aes(x=actual,y=count))+  
+theme_light(base_size=20) + geom_jitter(width = 0.5, height = 0.5)+
+geom_point(color='red')+geom_abline(color='blue',size=.8)+
+xlab("actual") +
+ylab("ctree_prediction")
+
+##################################neural network###################################################
+head(train_data)
+library("neuralnet")
+train_data2 <- train_data
+train_data2$time <- NULL
+train_data2$datetime <- NULL
+train_data2$day <- NULL
+train_data2$season <- as.numeric(train_data2$season)
+train_data2$holiday <- as.numeric(train_data2$holiday)
+train_data2$workingday <- as.numeric(train_data2$workingday)
+train_data2$weather <- as.numeric(train_data2$weather)
+train_data2$hour <- as.numeric(train_data2$hour)
+str(train_data2)
+head(train_data2)
+n <- names(train_data2)
+f <- as.formula(paste("count ~", paste(n[!n %in% c("count")], collapse = " + ")))
+nn <- neuralnet(f,data=train_data2,hidden=c(5,3,3),threshold = 250000,lifesign="full",linear.output = TRUE)
+
+plot(nn)
+
+test_data2 <- test_data
+test_data2$time <- NULL
+test_data2$datetime <- NULL
+test_data2$day <- NULL
+
+head(test_data2)
+compute(nn, test_data2[,9])
+pred <- head(pred$net.result)
+#hist(pred$net.result)
+str(pred$net.result)
+summary(pred$net.result)
+
+
+
+  
+#############################random Forest#########################################################
+  
+library(rpart)
+fit.random_tree <- rpart(formula1, data=train_data)
+predict.rtree <- predict(fit.random_tree,test_data)
+predict.rtree
+a<-as.data.frame(predict.rtree)
+
+MSE_rtree <- sqrt(colSums((a -test_data$count)^2)/length(test_data$count))
+MSE_rtree
+
+RMSLE_rtree <- sqrt(colSums((log(a+1) - log(test_data$count+1))^2)/length(test_data$count))
+RMSLE_rtree  
+plot(test_data$count, predict.rtree)
+
+a1 <-cbind(actual=test_data$count,predit=predict.rtree)
+b1<-as.data.frame(a1)
+ggplot(data=b1,aes(x=actual,y=predit))+  
+  theme_light(base_size=20) + geom_jitter(width = 0.5, height = 0.5)+
+  geom_point(color='red')+geom_abline(color='blue',size=.8)+
+  xlab("actual") +
+  ylab("rtree_prediction")
+
+
+## Lets put multiple trees there :
+library(caret)  
+library(randomForest)
+
+
+rf<- randomForest(formula1,data=train_data,ntree=500,importance=T)
+
+predic_rf_tree<-predict(rf,test_data) 
+predic_rf_tree
+c<-as.data.frame(predic_rf_tree)
+
+MSE_rf <- sqrt(colSums((c - test_data$count)^2)/length(test_data$count))
+MSE_rf
+RMSLE_rf <- sqrt(colSums((log(c+1) - log(test_data$count+1))^2)/length(test_data$count))
+RMSLE_rf
+plot(test_data$count,predic_rf_tree)
+a2 <-cbind(actual=test_data$count,predit=predic_rf_tree)
+b2<-as.data.frame(a2)
+ggplot(data=b2,aes(x=actual,y=predit))+  
+  theme_light(base_size=20) + geom_jitter(width = 0.5, height = 0.5)+
+  geom_point(color='red')+geom_abline(color='blue',size=.8)+
+  xlab("actual") +
+  ylab("rf_prediction")
+
+
